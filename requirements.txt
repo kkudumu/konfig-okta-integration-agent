@@ -1,0 +1,55 @@
+# Core AI/ML dependencies
+langchain>=0.1.0
+langgraph>=0.0.40
+langsmith>=0.1.0
+openai>=1.12.0
+langchain-google-genai>=1.0.0
+sentence-transformers>=2.2.2
+
+# Web automation and HTTP
+playwright>=1.40.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+markdownify>=0.11.6
+requests>=2.31.0
+httpx>=0.27.0
+
+# Database and vector storage
+psycopg2-binary>=2.9.9
+asyncpg>=0.29.0
+sqlalchemy>=2.0.25
+alembic>=1.13.0
+pgvector>=0.2.4
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Configuration and validation
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Security
+cryptography>=41.0.0
+hvac>=2.0.0
+
+# Web API framework
+uvicorn>=0.24.0
+fastapi>=0.108.0
+jinja2>=3.1.0
+
+# Logging and CLI
+structlog>=23.2.0
+rich>=13.7.0
+typer>=0.9.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+black>=23.12.0
+isort>=5.13.0
+flake8>=7.0.0
+mypy>=1.8.0
+pre-commit>=3.6.0

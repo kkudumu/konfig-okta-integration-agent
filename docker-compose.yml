@@ -1,0 +1,215 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: konfig-postgres
+    environment:
+      POSTGRES_DB: konfig
+      POSTGRES_USER: konfig
+      POSTGRES_PASSWORD: konfig_dev_password
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U konfig -d konfig"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - konfig-network
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: konfig-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - konfig-network
+
+  # HashiCorp Vault for secrets management
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: konfig-vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - konfig-network
+
+  # Konfig main application (development)
+  konfig-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: konfig-dev
+    ports:
+      - "8000:8000"
+      - "8001:8001"  # Debug port
+    environment:
+      - DATABASE_URL=postgresql://konfig:konfig_dev_password@postgres:5432/konfig
+      - REDIS_URL=redis://redis:6379/0
+      - VAULT_URL=http://vault:8200
+      - VAULT_TOKEN=dev-root-token
+      - PYTHONPATH=/app
+      - LOG_LEVEL=DEBUG
+      - ENVIRONMENT=development
+    volumes:
+      - .:/app
+      - /app/venv  # Exclude venv from volume mount
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - konfig-network
+    restart: unless-stopped
+
+  # Konfig production
+  konfig-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: konfig-prod
+    ports:
+      - "8080:8000"
+    environment:
+      - DATABASE_URL=postgresql://konfig:konfig_dev_password@postgres:5432/konfig
+      - REDIS_URL=redis://redis:6379/0
+      - VAULT_URL=http://vault:8200
+      - VAULT_TOKEN=dev-root-token
+      - PYTHONPATH=/app
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    networks:
+      - konfig-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: konfig-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - konfig-network
+    profiles:
+      - monitoring
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: konfig-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./deployment/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - konfig-network
+    profiles:
+      - monitoring
+
+  # Database migration service
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: konfig-migrate
+    environment:
+      - DATABASE_URL=postgresql://konfig:konfig_dev_password@postgres:5432/konfig
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - konfig-network
+    profiles:
+      - migration
+
+  # Test runner
+  konfig-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: testing
+    container_name: konfig-test
+    environment:
+      - DATABASE_URL=postgresql://konfig:konfig_dev_password@postgres:5432/konfig_test
+      - REDIS_URL=redis://redis:6379/1
+      - VAULT_URL=http://vault:8200
+      - VAULT_TOKEN=dev-root-token
+      - PYTHONPATH=/app
+      - ENVIRONMENT=testing
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - konfig-network
+    profiles:
+      - testing
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:    
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  konfig-network:
+    driver: bridge
