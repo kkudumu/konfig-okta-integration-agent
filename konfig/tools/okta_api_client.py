@@ -230,14 +230,22 @@ class OktaAPIClient(LoggingMixin):
         app_config = {
             "label": label,
             "signOnMode": "SAML_2_0",
+            "visibility": {
+                "autoSubmitToolbar": False,
+                "hide": {
+                    "iOS": False,
+                    "web": False
+                }
+            },
             "settings": {
                 "app": settings.get("app", {}) if settings else {},
                 "signOn": {
-                    # These will be updated later when we have vendor-specific information
-                    "ssoAcsUrl": settings.get("ssoAcsUrl") if settings else None,
-                    "audience": settings.get("audience") if settings else None,
-                    "recipient": settings.get("recipient") if settings else None,
-                    "destination": settings.get("destination") if settings else None,
+                    # Basic SAML settings - will be updated with vendor-specific information
+                    "defaultRelayState": "",
+                    "ssoAcsUrl": settings.get("ssoAcsUrl") if settings else "https://example.com/sso/saml",
+                    "audience": settings.get("audience") if settings else "https://example.com",
+                    "recipient": settings.get("recipient") if settings else "https://example.com/sso/saml",
+                    "destination": settings.get("destination") if settings else "https://example.com/sso/saml",
                     "subjectNameIdTemplate": "${user.userName}",
                     "subjectNameIdFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
                     "responseSigned": True,

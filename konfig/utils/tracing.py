@@ -162,7 +162,7 @@ class ExecutionTracer:
                 for span in spans:
                     await self.memory_module.store_trace(
                         job_id=job_uuid,
-                        trace_type="execution_span",
+                        trace_type="observation",
                         content=span.to_dict(),
                         status="success" if span.status != "error" else "failure",
                         duration_ms=int(span.duration_ms) if span.duration_ms else None,

@@ -61,6 +61,9 @@ class OktaSettings(BaseSettings):
     
     class Config:
         env_prefix = "OKTA_"
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 class LLMSettings(BaseSettings):
@@ -88,7 +91,24 @@ class LLMSettings(BaseSettings):
     # to avoid issues during configuration initialization
     
     class Config:
-        env_prefix = "LLM_"
+        env_prefix = ""
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+
+class GoogleSettings(BaseSettings):
+    """Google Workspace admin configuration settings."""
+    
+    admin_username: Optional[str] = Field(default=None, env="GOOGLE_ADMIN_USERNAME")
+    admin_password: Optional[str] = Field(default=None, env="GOOGLE_ADMIN_PASSWORD")
+    admin_domain: Optional[str] = Field(default=None, env="GOOGLE_ADMIN_DOMAIN")
+    
+    class Config:
+        env_prefix = "GOOGLE_"
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
 
 
 class SecuritySettings(BaseSettings):
@@ -239,6 +259,7 @@ class Settings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     okta: OktaSettings = OktaSettings()
     llm: LLMSettings = LLMSettings()
+    google: GoogleSettings = GoogleSettings()
     security: SecuritySettings = SecuritySettings()
     vault: VaultSettings = VaultSettings()
     web: WebSettings = WebSettings()
@@ -271,7 +292,7 @@ class Settings(BaseSettings):
         return self.environment == "testing" or self.testing
     
     class Config:
-        env_file = ".env"
+        env_file = [".env", "konfig/.env"]
         env_file_encoding = "utf-8"
         case_sensitive = False
         extra = "ignore"  # Ignore extra fields from environment

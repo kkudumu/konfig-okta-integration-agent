@@ -259,6 +259,7 @@ class ExecutionTrace(Base):
     children = relationship(
         "ExecutionTrace",
         backref="parent",
+        remote_side=[trace_id],
         doc="Child traces"
     )
     
@@ -467,9 +468,9 @@ class KnowledgeBaseVector(Base):
         doc="The text content of this chunk"
     )
     
-    # Vector embedding (768 dimensions for sentence-transformers)
+    # Vector embedding (384 dimensions for all-MiniLM-L6-v2)
     embedding = Column(
-        Vector(768),
+        Vector(384),
         nullable=False,
         doc="Vector embedding of the chunk text"
     )

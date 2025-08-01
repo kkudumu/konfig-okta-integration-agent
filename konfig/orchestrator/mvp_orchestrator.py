@@ -6,6 +6,7 @@ for demonstrating the core functionality without requiring full LLM integration.
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -124,7 +125,11 @@ class MVPOrchestrator(LoggingMixin):
             
             # Step 2: Determine integration plan
             with span("determine_plan"):
-                plan = await self._determine_integration_plan(vendor_info, vendor_hint)
+                # Get documentation content for LLM analysis
+                documentation_content = await self._get_documentation_content(documentation_url)
+                plan = await self._determine_integration_plan(
+                    vendor_info, documentation_content, okta_domain, vendor_hint
+                )
                 await self.memory_module.store_trace(
                     job_id=job_id,
                     trace_type="thought",
@@ -216,36 +221,106 @@ class MVPOrchestrator(LoggingMixin):
     async def _determine_integration_plan(
         self,
         vendor_info: Dict[str, Any],
+        documentation_content: str,
+        okta_domain: str,
         vendor_hint: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Determine which integration plan to use."""
+        """Use LLM to dynamically determine integration plan."""
         
-        vendor_name = vendor_info.get("vendor_name", "").lower()
-        title = vendor_info.get("title", "").lower()
-        
-        # Try to match against known vendors
-        if vendor_hint and vendor_hint.lower() in self.known_vendors:
-            plan = self.known_vendors[vendor_hint.lower()]
-            self.logger.info(f"Using plan for {plan['name']} (from hint)")
-            return plan
-        
-        # Match by vendor name patterns
-        for vendor_key, vendor_config in self.known_vendors.items():
-            vendor_config_name = vendor_config["name"].lower()
-            if (vendor_config_name in vendor_name or 
-                vendor_config_name in title or
-                vendor_key.replace("_", " ") in vendor_name):
-                self.logger.info(f"Detected vendor: {vendor_config['name']}")
-                return vendor_config
-        
-        # Default generic plan
-        self.logger.info("Using generic integration plan")
+        try:
+            from konfig.services.intelligent_planner import IntelligentPlanner
+            
+            planner = IntelligentPlanner()
+            
+            # Generate dynamic plan using LLM analysis
+            plan = await planner.generate_integration_plan(
+                vendor_info=vendor_info,
+                documentation_content=documentation_content,
+                okta_domain=okta_domain
+            )
+            
+            self.logger.info(
+                f"Generated dynamic plan for {plan.vendor_name}",
+                steps=len(plan.steps),
+                complexity=plan.complexity,
+                duration=plan.estimated_duration
+            )
+            
+            # Convert to orchestrator format
+            return {
+                "name": f"{plan.vendor_name} SAML Integration",
+                "admin_url": None,  # Will be determined dynamically
+                "saml_path": None,  # Will be determined dynamically
+                "plan": [step.to_dict() for step in plan.steps],
+                "metadata": {
+                    "vendor_name": plan.vendor_name,
+                    "complexity": plan.complexity,
+                    "estimated_duration": plan.estimated_duration,
+                    "requirements": plan.requirements,
+                    "generated_by": "llm"
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate dynamic plan: {e}")
+            # Fallback to basic generic plan
+            return await self._get_fallback_plan(vendor_info)
+    
+    async def _get_fallback_plan(self, vendor_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Fallback plan when LLM-driven planning fails."""
+        self.logger.warning("Using fallback generic plan")
         return {
             "name": "Generic SAML",
             "admin_url": None,
             "saml_path": None,
-            "plan": self._get_generic_plan()
+            "plan": [
+                {
+                    "name": "Create SAML Application in Okta",
+                    "tool": "OktaAPIClient",
+                    "action": "create_saml_app",
+                    "params": {"label": "{app_name}"},
+                    "description": "Creates a basic SAML application in Okta"
+                },
+                {
+                    "name": "Get Okta SAML Metadata",
+                    "tool": "OktaAPIClient", 
+                    "action": "get_app_metadata",
+                    "params": {"app_id": "{okta_app_id}"},
+                    "description": "Retrieves SAML metadata from Okta"
+                }
+            ],
+            "metadata": {
+                "vendor_name": vendor_info.get("vendor_name", "Unknown"),
+                "complexity": "simple",
+                "estimated_duration": 10,
+                "requirements": ["Okta admin access"],
+                "generated_by": "fallback"
+            }
         }
+    
+    async def _get_documentation_content(self, documentation_url: str) -> str:
+        """Retrieve full documentation content for LLM analysis."""
+        try:
+            import httpx
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(documentation_url, timeout=30.0)
+                response.raise_for_status()
+                
+                # Extract text content (basic HTML parsing)
+                content = response.text
+                
+                # Simple HTML tag removal for cleaner text
+                import re
+                content = re.sub(r'<[^>]+>', ' ', content)
+                content = re.sub(r'\s+', ' ', content).strip()
+                
+                self.logger.debug(f"Retrieved {len(content)} characters of documentation")
+                return content
+                
+        except Exception as e:
+            self.logger.error(f"Failed to retrieve documentation content: {e}")
+            return f"Documentation URL: {documentation_url}\n(Content could not be retrieved)"
     
     async def _execute_plan(
         self,
@@ -400,6 +475,24 @@ class MVPOrchestrator(LoggingMixin):
         if tool == "OktaAPIClient":
             return await self._execute_okta_action(okta_client, action, resolved_params)
         elif tool == "WebInteractor" and web_interactor:
+            # Check if this is a Google Workspace navigation that needs authentication
+            if action == "navigate" and "admin.google.com" in resolved_params.get("url", ""):
+                # Ensure Google authentication is handled
+                from konfig.services.intelligent_web_automation import IntelligentWebAutomation
+                intelligent_web = IntelligentWebAutomation(web_interactor)
+                
+                result = await intelligent_web.navigate_and_configure_saml(
+                    admin_url=resolved_params.get("url", ""),
+                    sso_url="", # Will be filled later
+                    entity_id="", # Will be filled later
+                    vendor_name="Google Workspace"
+                )
+                
+                if result["status"] == "error":
+                    return {"status": "failed", "message": result["message"]}
+                
+                return {"status": "success", "extracted_data": {"authenticated": True}}
+            
             return await self._execute_web_action(web_interactor, action, resolved_params)
         else:
             return {"status": "skipped", "reason": f"Tool {tool} not available"}
@@ -544,8 +637,150 @@ class MVPOrchestrator(LoggingMixin):
                 }
             }
         
+        elif action == "navigate_and_wait":
+            url = params.get("url")
+            wait_for = params.get("wait_for", "")
+            
+            result = await web_interactor.navigate(url)
+            
+            # Simple wait implementation - could be enhanced with LLM
+            if "text:" in wait_for:
+                text_to_wait = wait_for.replace("text:", "")
+                # Wait for text to appear (basic implementation)
+                await web_interactor.page.wait_for_timeout(3000)
+            
+            return {
+                "status": "success",
+                "extracted_data": {"navigated_to": url}
+            }
+        
+        elif action == "configure_google_saml":
+            # Use intelligent web automation for SAML configuration
+            from konfig.services.intelligent_web_automation import IntelligentWebAutomation
+            
+            intelligent_web = IntelligentWebAutomation(web_interactor)
+            
+            result = await intelligent_web.navigate_and_configure_saml(
+                admin_url=await web_interactor.get_current_url(),
+                sso_url=params.get("sso_url", ""),
+                entity_id=params.get("entity_id", ""),
+                certificate=params.get("certificate"),
+                vendor_name="Google Workspace"
+            )
+            
+            return {
+                "status": result["status"],
+                "extracted_data": result.get("details", {}),
+                "message": result.get("message", "")
+            }
+        
+        elif action == "test_sso_connection":
+            # Use intelligent web automation for SSO testing
+            from konfig.services.intelligent_web_automation import IntelligentWebAutomation
+            
+            intelligent_web = IntelligentWebAutomation(web_interactor)
+            test_result = await intelligent_web._test_sso_configuration("Generic")
+            
+            return {
+                "status": "success" if not test_result.get("error") else "warning",
+                "extracted_data": test_result
+            }
+        
         else:
-            raise ValueError(f"Unknown web action: {action}")
+            # Try intelligent web action execution for unknown actions
+            return await self._execute_intelligent_web_action(web_interactor, action, params)
+    
+    async def _execute_intelligent_web_action(
+        self,
+        web_interactor: WebInteractor,
+        action: str,
+        params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute a web action using LLM guidance for unknown actions."""
+        
+        try:
+            # Get current page state
+            page_content = await web_interactor.get_current_dom(simplify=True)
+            current_url = await web_interactor.get_current_url()
+            
+            # Ask LLM how to perform this action
+            action_prompt = f"""
+You need to perform this web automation action: {action}
+
+CURRENT PAGE: {current_url}
+PARAMETERS: {json.dumps(params, indent=2)}
+
+PAGE CONTENT:
+{page_content[:2000]}...
+
+Determine what specific web interactions are needed to accomplish "{action}".
+
+Respond with JSON:
+{{
+    "actions": [
+        {{
+            "type": "click|type|select|navigate",
+            "selector": "CSS selector or text to find",
+            "value": "value to use (for type/select actions)",
+            "description": "what this does"
+        }}
+    ],
+    "expected_outcome": "what should happen after these actions"
+}}
+
+Focus on being precise and actionable.
+"""
+            
+            from konfig.services.llm_service import LLMService
+            llm_service = LLMService()
+            
+            response = await llm_service.generate_response(
+                prompt=action_prompt,
+                max_tokens=1000,
+                temperature=0.1
+            )
+            
+            # Use the same JSON extraction method as IntelligentPlanner
+            from konfig.services.intelligent_planner import IntelligentPlanner
+            planner = IntelligentPlanner()
+            action_plan = planner._extract_json_from_response(response)
+            
+            # Execute the planned actions
+            results = []
+            for planned_action in action_plan.get("actions", []):
+                action_type = planned_action["type"]
+                selector = planned_action["selector"]
+                value = planned_action.get("value")
+                
+                if action_type == "click":
+                    await web_interactor.click(selector)
+                elif action_type == "type" and value:
+                    await web_interactor.type(selector, value)
+                elif action_type == "select" and value:
+                    await web_interactor.select_option(selector, value)
+                elif action_type == "navigate":
+                    await web_interactor.navigate(value or selector)
+                
+                results.append({
+                    "action": action_type,
+                    "selector": selector,
+                    "completed": True
+                })
+            
+            return {
+                "status": "success",
+                "extracted_data": {
+                    "actions_executed": results,
+                    "expected_outcome": action_plan.get("expected_outcome")
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Intelligent web action failed: {e}")
+            return {
+                "status": "error", 
+                "message": f"Intelligent web action failed: {str(e)}"
+            }
     
     def _resolve_parameters(
         self,
@@ -600,6 +835,33 @@ class MVPOrchestrator(LoggingMixin):
                 "action": "get_app_metadata",
                 "params": {
                     "app_id": "{okta_app_id}"
+                }
+            },
+            {
+                "name": "Navigate to Google Admin Console",
+                "tool": "WebInteractor",
+                "action": "navigate_and_wait",
+                "params": {
+                    "url": "https://admin.google.com/ac/security/sso",
+                    "wait_for": "text:Set up SSO with third party IdP"
+                }
+            },
+            {
+                "name": "Configure SAML in Google Workspace",
+                "tool": "WebInteractor", 
+                "action": "configure_google_saml",
+                "params": {
+                    "sso_url": "{sso_url}",
+                    "entity_id": "{entity_id}",
+                    "certificate": "{certificate}"
+                }
+            },
+            {
+                "name": "Test SSO Configuration",
+                "tool": "WebInteractor",
+                "action": "test_sso_connection",
+                "params": {
+                    "test_user": "test@{domain}"
                 }
             }
         ]

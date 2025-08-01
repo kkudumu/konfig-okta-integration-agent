@@ -289,10 +289,12 @@ class MemoryModule(LoggingMixin):
             List of ExecutionTrace instances
         """
         async with get_async_session() as session:
-            query = session.query(ExecutionTrace).filter(ExecutionTrace.job_id == job_id)
+            from sqlalchemy import select
+            
+            query = select(ExecutionTrace).where(ExecutionTrace.job_id == job_id)
             
             if trace_type:
-                query = query.filter(ExecutionTrace.trace_type == trace_type)
+                query = query.where(ExecutionTrace.trace_type == trace_type)
             
             query = query.order_by(ExecutionTrace.timestamp).limit(limit)
             

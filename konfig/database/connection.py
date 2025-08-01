@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import QueuePool, NullPool
 
 from konfig.config.settings import get_settings
 from konfig.database.models import Base
@@ -125,11 +125,7 @@ class DatabaseManager:
         
         engine = create_async_engine(
             database_url,
-            poolclass=QueuePool,
-            pool_size=self.settings.database.pool_size,
-            max_overflow=self.settings.database.max_overflow,
-            pool_pre_ping=True,
-            pool_recycle=3600,  # 1 hour
+            poolclass=NullPool,  # Use NullPool for async engines
             echo=self.settings.database.echo,
         )
         
