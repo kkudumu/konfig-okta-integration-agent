@@ -1,0 +1,25 @@
+{
+  "google_admin_sso": {
+    "url_pattern": "admin.google.com/ac/security/sso",
+    "page_indicators": [
+      "Third-party SSO profiles",
+      "Legacy SSO Profile"
+    ],
+    "required_actions": [
+      {
+        "action": "click",
+        "target": "Legacy SSO Profile",
+        "selector": "tr:has-text('Legacy SSO Profile')",
+        "description": "Click on Legacy SSO Profile row to enter configuration"
+      }
+    ],
+    "success_indicators": [
+      "Sign-in page URL",
+      "Sign-out page URL",
+      "Verification certificate"
+    ],
+    "confidence": 0.9,
+    "learned_from": "user_guidance",
+    "last_used": 1754059251.911594
+  }
+}

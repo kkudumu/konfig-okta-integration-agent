@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 
 from konfig.utils.logging import LoggingMixin
+from konfig.services.adaptive_intelligence import AdaptiveIntelligence
 
 
 @dataclass
@@ -33,6 +34,15 @@ class IntelligentWebAutomation(LoggingMixin):
         super().__init__()
         self.setup_logging("intelligent_web_automation")
         self.web_interactor = web_interactor
+        
+        # Initialize adaptive intelligence
+        try:
+            from konfig.services.llm_service import LLMService
+            llm_service = LLMService()
+            self.adaptive_intelligence = AdaptiveIntelligence(web_interactor, llm_service)
+        except Exception as e:
+            self.logger.warning(f"Could not initialize LLM service for adaptive intelligence: {e}")
+            self.adaptive_intelligence = AdaptiveIntelligence(web_interactor, None)
     
     async def navigate_and_configure_saml(
         self,
@@ -177,25 +187,32 @@ class IntelligentWebAutomation(LoggingMixin):
         
         # Check if we're on the SSO profiles list page (Google Workspace specific)
         if "google" in vendor_name.lower() and "/security/sso" in current_url:
-            # First, we need to click on the Legacy SSO Profile to enter configuration
-            self.logger.info("Detected Google SSO profiles list page, clicking on Legacy SSO Profile")
+            self.logger.info("Detected Google SSO profiles list page, using adaptive intelligence to navigate")
             
-            # Try to click on the Legacy SSO Profile row
-            legacy_clicked = await self._smart_click_by_text("Legacy SSO Profile")
-            if not legacy_clicked:
-                # Try alternative selectors
-                try:
-                    # Look for table row containing Legacy SSO Profile
-                    await self.web_interactor._page.click("tr:has-text('Legacy SSO Profile')", timeout=5000)
-                    legacy_clicked = True
-                except Exception:
-                    pass
+            # Use adaptive intelligence to click on Legacy SSO Profile
+            navigation_action = {
+                "name": "Click Legacy SSO Profile",
+                "tool": "WebInteractor", 
+                "action": "click",
+                "params": {
+                    "selector": "tr:has-text('Legacy SSO Profile')",
+                    "text_content": "Legacy SSO Profile"
+                }
+            }
             
-            if legacy_clicked:
-                # Wait for navigation
+            nav_result = await self.adaptive_intelligence.execute_with_adaptive_intelligence(
+                navigation_action,
+                {"working_memory": {}, "vendor_name": vendor_name}
+            )
+            
+            if nav_result.get("success"):
+                self.logger.info("Successfully navigated to Legacy SSO Profile configuration")
+                # Wait for page load and get updated content
                 await self.web_interactor._page.wait_for_timeout(3000)
-                # Get updated page content
                 page_content = await self.web_interactor.get_current_dom(simplify=True)
+            else:
+                self.logger.warning(f"Failed to navigate to Legacy SSO Profile: {nav_result.get('error')}")
+                # Continue with original page content for LLM analysis
         
         config_prompt = f"""
 You are configuring SAML SSO settings for {vendor_name}. 
@@ -262,22 +279,45 @@ Be precise with selectors - use ID, name, label text, or unique attributes when 
             planner = IntelligentPlanner()
             config = planner._extract_json_from_response(response)
             
-            # Execute the configuration actions
+            # Execute the configuration actions using adaptive intelligence
             configured_fields = []
             
             for field in config.get("fields_found", []):
-                success = await self._configure_field(field, sso_url, entity_id, certificate)
-                configured_fields.append({
-                    "field_type": field["field_type"],
-                    "success": success
-                })
+                field_action = self._create_field_action(field, sso_url, entity_id, certificate)
+                
+                if field_action:
+                    result = await self.adaptive_intelligence.execute_with_adaptive_intelligence(
+                        field_action,
+                        {"working_memory": {"sso_url": sso_url, "entity_id": entity_id}}
+                    )
+                    
+                    configured_fields.append({
+                        "field_type": field["field_type"],
+                        "success": result.get("success", False),
+                        "error": result.get("error") if not result.get("success") else None
+                    })
             
             # Submit the form if submit button found
             if config.get("submit_button"):
-                submit_success = await self._smart_click(config["submit_button"]["selector"])
+                submit_action = {
+                    "name": "Submit SAML Configuration",
+                    "tool": "WebInteractor",
+                    "action": "click", 
+                    "params": {
+                        "selector": config["submit_button"]["selector"],
+                        "text_content": config["submit_button"].get("text")
+                    }
+                }
+                
+                submit_result = await self.adaptive_intelligence.execute_with_adaptive_intelligence(
+                    submit_action,
+                    {"working_memory": {}}
+                )
+                
                 configured_fields.append({
                     "field_type": "submit",
-                    "success": submit_success
+                    "success": submit_result.get("success", False),
+                    "error": submit_result.get("error") if not submit_result.get("success") else None
                 })
             
             return {
@@ -290,6 +330,69 @@ Be precise with selectors - use ID, name, label text, or unique attributes when 
             self.logger.error(f"Failed to configure SAML settings: {e}")
             return {"error": str(e)}
     
+    def _create_field_action(
+        self,
+        field_config: Dict[str, Any],
+        sso_url: str,
+        entity_id: str,
+        certificate: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Create an action for configuring a specific field."""
+        
+        field_type = field_config.get("field_type")
+        selector = field_config.get("selector")
+        action = field_config.get("action")
+        
+        # Determine the value to use
+        value = None
+        if field_type in ["sso_url", "sign_in_url"]:
+            value = sso_url
+        elif field_type == "sign_out_url":
+            value = sso_url.replace('/sso/saml', '/logout') if sso_url else None
+        elif field_type == "entity_id":
+            value = entity_id
+        elif field_type == "certificate" and certificate:
+            value = certificate
+        elif field_type == "password_url":
+            value = sso_url.replace('/sso/saml', '/password') if sso_url else None
+        
+        if not selector:
+            return None
+        
+        # Create appropriate action
+        if action == "type" and value:
+            return {
+                "name": f"Fill {field_type} field",
+                "tool": "WebInteractor",
+                "action": "type",
+                "params": {
+                    "selector": selector,
+                    "text": value,
+                    "clear_first": True
+                }
+            }
+        elif action in ["click", "check"]:
+            return {
+                "name": f"Click {field_type} field",
+                "tool": "WebInteractor", 
+                "action": "click",
+                "params": {
+                    "selector": selector
+                }
+            }
+        elif action == "select" and value:
+            return {
+                "name": f"Select {field_type} option",
+                "tool": "WebInteractor",
+                "action": "select_option", 
+                "params": {
+                    "selector": selector,
+                    "value": value
+                }
+            }
+        
+        return None
+    
     async def _configure_field(
         self,
         field_config: Dict[str, Any],
@@ -297,7 +400,7 @@ Be precise with selectors - use ID, name, label text, or unique attributes when 
         entity_id: str,
         certificate: Optional[str]
     ) -> bool:
-        """Configure a specific field based on its type."""
+        """Configure a specific field based on its type (legacy method - kept for compatibility)."""
         
         try:
             field_type = field_config["field_type"]
