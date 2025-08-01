@@ -173,6 +173,29 @@ class IntelligentWebAutomation(LoggingMixin):
         """Use LLM to configure SAML settings on the current page."""
         
         page_content = await self.web_interactor.get_current_dom(simplify=True)
+        current_url = await self.web_interactor.get_current_url()
+        
+        # Check if we're on the SSO profiles list page (Google Workspace specific)
+        if "google" in vendor_name.lower() and "/security/sso" in current_url:
+            # First, we need to click on the Legacy SSO Profile to enter configuration
+            self.logger.info("Detected Google SSO profiles list page, clicking on Legacy SSO Profile")
+            
+            # Try to click on the Legacy SSO Profile row
+            legacy_clicked = await self._smart_click_by_text("Legacy SSO Profile")
+            if not legacy_clicked:
+                # Try alternative selectors
+                try:
+                    # Look for table row containing Legacy SSO Profile
+                    await self.web_interactor._page.click("tr:has-text('Legacy SSO Profile')", timeout=5000)
+                    legacy_clicked = True
+                except Exception:
+                    pass
+            
+            if legacy_clicked:
+                # Wait for navigation
+                await self.web_interactor._page.wait_for_timeout(3000)
+                # Get updated page content
+                page_content = await self.web_interactor.get_current_dom(simplify=True)
         
         config_prompt = f"""
 You are configuring SAML SSO settings for {vendor_name}. 
@@ -180,37 +203,48 @@ You are configuring SAML SSO settings for {vendor_name}.
 CURRENT PAGE CONTENT:
 {page_content[:3000]}...
 
+CURRENT URL: {current_url}
+
 SAML VALUES TO CONFIGURE:
-- SSO URL: {sso_url}
+- SSO URL (Sign-in page URL): {sso_url}
+- Sign-out page URL: {sso_url.replace('/sso/saml', '/logout')}  # Typically the logout URL
 - Entity ID: {entity_id}
 - Certificate: {"Provided" if certificate else "Not provided"}
 
-Analyze the page and identify form fields that need to be filled with these SAML values.
-Look for fields like:
-- SSO URL, Sign-on URL, Login URL, SAML Endpoint
-- Entity ID, Issuer, IdP Entity ID
-- Certificate, X.509 Certificate, Signing Certificate
-- Any enable/activate SSO buttons or toggles
+For Google Workspace, we need to:
+1. If we see a list of SSO profiles, click on "Legacy SSO Profile" first
+2. Then fill in the form fields:
+   - Sign-in page URL
+   - Sign-out page URL  
+   - Verification certificate
+   - Check "Use a domain-specific issuer"
+   - Change password URL
 
-Respond with JSON:
+Analyze the page and respond with JSON:
 {{
+    "needs_navigation": true/false,
+    "navigation_action": {{
+        "action": "click",
+        "selector": "CSS selector or text",
+        "description": "what to click"
+    }},
     "fields_found": [
         {{
-            "field_type": "sso_url|entity_id|certificate|enable_toggle",
-            "selector": "CSS selector or text to identify field",
+            "field_type": "sign_in_url|sign_out_url|certificate|domain_issuer|password_url",
+            "selector": "CSS selector or label text",
             "current_value": "current field value if visible",
-            "action": "type|select|click|toggle",
+            "action": "type|select|click|check",
             "new_value": "value to set"
         }}
     ],
     "submit_button": {{
-        "selector": "CSS selector for save/submit button",
-        "text": "button text"
+        "selector": "CSS selector for SAVE button",
+        "text": "SAVE"
     }},
     "confidence": 0.0-1.0
 }}
 
-Be precise with selectors - use ID, name, or unique attributes when possible.
+Be precise with selectors - use ID, name, label text, or unique attributes when possible.
 """
 
         try:

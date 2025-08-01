@@ -376,6 +376,30 @@ class MVPOrchestrator(LoggingMixin):
             step_start_time = datetime.now()
             
             try:
+                # Check if step is still needed based on current state
+                step_needed = await self._validate_step_needed(
+                    step, web_interactor, working_memory, dry_run
+                )
+                
+                if not step_needed:
+                    self.logger.info(f"Skipping step '{step_name}' - conditions already met")
+                    
+                    # Store skip trace
+                    await self.memory_module.store_trace(
+                        job_id=job_id,
+                        trace_type="observation",
+                        content={
+                            "step": i + 1,
+                            "name": step_name,
+                            "status": "skipped",
+                            "reason": "Step conditions already satisfied"
+                        },
+                        status="success"
+                    )
+                    
+                    completed_steps += 1
+                    continue
+                
                 # Store step trace
                 await self.memory_module.store_trace(
                     job_id=job_id,
@@ -660,11 +684,23 @@ class MVPOrchestrator(LoggingMixin):
             
             intelligent_web = IntelligentWebAutomation(web_interactor)
             
+            # Get Okta SAML values from working memory
+            sso_url = working_memory.get("sso_url", params.get("sso_url", ""))
+            entity_id = working_memory.get("entity_id", params.get("entity_id", ""))
+            certificate = working_memory.get("certificate", params.get("certificate"))
+            
+            self.logger.info(
+                f"Configuring Google SAML with Okta values",
+                sso_url=sso_url,
+                entity_id=entity_id,
+                has_certificate=bool(certificate)
+            )
+            
             result = await intelligent_web.navigate_and_configure_saml(
                 admin_url=await web_interactor.get_current_url(),
-                sso_url=params.get("sso_url", ""),
-                entity_id=params.get("entity_id", ""),
-                certificate=params.get("certificate"),
+                sso_url=sso_url,
+                entity_id=entity_id,
+                certificate=certificate,
                 vendor_name="Google Workspace"
             )
             
@@ -781,6 +817,88 @@ Focus on being precise and actionable.
                 "status": "error", 
                 "message": f"Intelligent web action failed: {str(e)}"
             }
+    
+    async def _validate_step_needed(
+        self,
+        step: Dict[str, Any],
+        web_interactor: Optional[WebInteractor],
+        working_memory: Dict[str, Any],
+        dry_run: bool
+    ) -> bool:
+        """Validate if a step is still needed based on current state."""
+        
+        if dry_run:
+            return True  # Always execute in dry run mode
+            
+        if not web_interactor:
+            return True  # Can't validate web state without web_interactor
+        
+        step_name = step.get("name", "").lower()
+        tool = step.get("tool")
+        action = step.get("action")
+        
+        try:
+            # Get current page state
+            current_url = await web_interactor.get_current_url()
+            page_title = (await web_interactor.get_page_title()).lower()
+            
+            # Check navigation-related steps
+            if "security" in step_name and "click" in step_name:
+                # Skip if we're already on a security-related page
+                if ("security" in current_url.lower() or 
+                    "sso" in current_url.lower() or 
+                    "security" in page_title or 
+                    "sso" in page_title):
+                    self.logger.info(f"Already on security/SSO page: {current_url}")
+                    return False
+            
+            if "navigate" in step_name and "admin" in step_name:
+                # Skip if we're already on the admin console
+                if "admin.google.com" in current_url:
+                    self.logger.info(f"Already on Google Admin Console: {current_url}")
+                    return False
+            
+            if "sso" in step_name and ("click" in step_name or "button" in step_name):
+                # Skip if we're already on the SSO configuration page
+                if ("/sso" in current_url.lower() or 
+                    "sso" in page_title or 
+                    "third party" in page_title):
+                    self.logger.info(f"Already on SSO configuration page: {current_url}")
+                    return False
+            
+            # Check Okta-related steps
+            if tool == "OktaAPIClient":
+                # Check if Okta app already exists
+                if action == "create_saml_app" and "okta_app_id" in working_memory:
+                    self.logger.info("SAML app already created, skipping creation")
+                    return False
+                
+                if action == "get_app_metadata" and all(
+                    key in working_memory for key in ["sso_url", "entity_id", "certificate"]
+                ):
+                    self.logger.info("App metadata already retrieved, skipping")
+                    return False
+            
+            # Check form filling steps
+            if "form" in step_name and "fill" in step_name:
+                # Check if form fields are already filled by looking for success indicators
+                try:
+                    # Look for success messages or filled forms
+                    page_content = await web_interactor.get_current_dom(simplify=True)
+                    if ("configured" in page_content.lower() or 
+                        "enabled" in page_content.lower() or
+                        "active" in page_content.lower()):
+                        self.logger.info("Form appears to be already configured")
+                        return False
+                except Exception:
+                    pass  # If we can't check, proceed with the step
+            
+            # Default: step is needed
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"Could not validate step necessity: {e}")
+            return True  # If we can't validate, proceed with the step
     
     def _resolve_parameters(
         self,
