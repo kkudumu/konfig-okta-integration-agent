@@ -198,7 +198,9 @@ AVAILABLE TOOLS:
 - OktaAPIClient: create_saml_app, get_app_metadata, update_app_settings
 - WebInteractor: navigate, click, type, select_option, fill_form, wait_for_element
 
-Example step format:
+Example step formats:
+
+OKTA STEP:
 {{
     "name": "Create SAML Application in Okta",
     "tool": "OktaAPIClient", 
@@ -217,6 +219,31 @@ Example step format:
     "prerequisites": []
 }}
 
+WEB INTERACTION STEP (with CSS selector):
+{{
+    "name": "Click Security Menu",
+    "tool": "WebInteractor",
+    "action": "click", 
+    "params": {{
+        "selector": "nav a[href*='security']"
+    }},
+    "description": "Navigate to security settings",
+    "prerequisites": []
+}}
+
+WEB INTERACTION STEP (with text content):
+{{
+    "name": "Click Set up SSO Button",
+    "tool": "WebInteractor",
+    "action": "click",
+    "params": {{
+        "selector": "button",
+        "text_content": "Set up SSO"
+    }},
+    "description": "Click the SSO setup button",
+    "prerequisites": []
+}}
+
 Generate steps that cover:
 1. Okta SAML app creation with vendor-specific settings
 2. Retrieving Okta metadata (SSO URL, Entity ID, Certificate)
@@ -225,10 +252,12 @@ Generate steps that cover:
 5. Testing the SSO connection
 
 IMPORTANT: For WebInteractor steps that need selectors:
-- Use specific CSS selectors like 'button[aria-label="Set up SSO"]' or '#sso-setup-button'
-- Use text-based selectors like 'button:contains("SSO")' for buttons with specific text
+- Use VALID CSS selectors like 'button[aria-label="Set up SSO"]' or '#sso-setup-button'
+- NEVER use ':contains()' pseudo-class - it's not valid CSS!
+- For text-based clicking, use the "text_content" parameter instead of selectors with :contains()
+- Use proper CSS selectors: 'button', 'a', 'input[type="submit"]', '.class-name', '#id-name'
 - Provide meaningful parameter values, never use null or empty strings
-- For click actions, always include either a "selector" or "text_content" parameter
+- For click actions targeting text, use "text_content" parameter with the text to find
 
 Return ONLY a JSON array of steps, no other text.
 """

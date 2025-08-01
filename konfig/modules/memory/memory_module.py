@@ -205,12 +205,14 @@ class MemoryModule(LoggingMixin):
             List of IntegrationJob instances
         """
         async with get_async_session() as session:
-            query = session.query(IntegrationJob)
+            from sqlalchemy import select
+            
+            query = select(IntegrationJob)
             
             if status:
-                query = query.filter(IntegrationJob.status == status)
+                query = query.where(IntegrationJob.status == status)
             if vendor_name:
-                query = query.filter(IntegrationJob.vendor_name == vendor_name)
+                query = query.where(IntegrationJob.vendor_name == vendor_name)
             
             query = query.order_by(desc(IntegrationJob.created_at))
             query = query.limit(limit).offset(offset)
@@ -519,7 +521,9 @@ class MemoryModule(LoggingMixin):
             List of matching ProceduralMemoryPattern instances
         """
         async with get_async_session() as session:
-            query = session.query(ProceduralMemoryPattern).filter(
+            from sqlalchemy import select, and_
+            
+            query = select(ProceduralMemoryPattern).where(
                 and_(
                     ProceduralMemoryPattern.vendor_domain == vendor_domain,
                     ProceduralMemoryPattern.confidence_score >= min_confidence
@@ -527,10 +531,10 @@ class MemoryModule(LoggingMixin):
             )
             
             if context_hash:
-                query = query.filter(ProceduralMemoryPattern.context_hash == context_hash)
+                query = query.where(ProceduralMemoryPattern.context_hash == context_hash)
             
             if pattern_type:
-                query = query.filter(ProceduralMemoryPattern.pattern_type == pattern_type)
+                query = query.where(ProceduralMemoryPattern.pattern_type == pattern_type)
             
             # Order by confidence score and recent usage
             query = query.order_by(
@@ -639,8 +643,10 @@ class MemoryModule(LoggingMixin):
         cutoff_date = datetime.utcnow().replace(day=datetime.utcnow().day - days_to_keep)
         
         async with get_async_session() as session:
+            from sqlalchemy import select, delete, and_
+            
             # Delete old failed jobs and their associated data
-            old_jobs_query = session.query(IntegrationJob).filter(
+            old_jobs_query = select(IntegrationJob).where(
                 and_(
                     IntegrationJob.created_at < cutoff_date,
                     IntegrationJob.status == "completed_failure"
@@ -651,14 +657,19 @@ class MemoryModule(LoggingMixin):
             deleted_jobs = len(old_jobs.scalars().all())
             
             # The foreign key cascades will handle related data
-            await session.execute(old_jobs_query.delete())
+            delete_query = delete(IntegrationJob).where(
+                and_(
+                    IntegrationJob.created_at < cutoff_date,
+                    IntegrationJob.status == "completed_failure"
+                )
+            )
+            await session.execute(delete_query)
             
             # Clean up unused patterns with very low confidence
-            low_confidence_patterns = await session.execute(
-                session.query(ProceduralMemoryPattern).filter(
-                    ProceduralMemoryPattern.confidence_score < 0.1
-                ).delete()
+            delete_patterns_query = delete(ProceduralMemoryPattern).where(
+                ProceduralMemoryPattern.confidence_score < 0.1
             )
+            low_confidence_patterns = await session.execute(delete_patterns_query)
             
             await session.commit()
             

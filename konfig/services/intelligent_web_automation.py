@@ -107,71 +107,56 @@ class IntelligentWebAutomation(LoggingMixin):
             }
     
     async def _find_sso_settings_page(self, vendor_name: str) -> Optional[str]:
-        """Use LLM to analyze page and find SSO settings."""
+        """Intelligently scan page to find SSO settings using multiple strategies."""
         
-        # Get current page content
-        page_content = await self.web_interactor.get_current_dom(simplify=True)
-        current_url = await self.web_interactor.get_current_url()
-        
-        # Analyze page with LLM
-        analysis_prompt = f"""
-You are analyzing the admin console for {vendor_name} to find SSO/SAML configuration settings.
-
-CURRENT URL: {current_url}
-
-PAGE CONTENT:
-{page_content[:2000]}...
-
-Look for:
-1. Links or buttons related to SSO, SAML, Single Sign-On, Authentication, Security, Identity, or Login settings
-2. Navigation menus that might contain these options
-3. Settings or configuration areas
-
-Respond with JSON:
-{{
-    "sso_found": true/false,
-    "sso_url": "full URL if found or null",
-    "navigation_needed": true/false,
-    "actions_required": [
-        {{
-            "action": "click|navigate",
-            "selector": "CSS selector or text to find",
-            "description": "What this action does"
-        }}
-    ],
-    "confidence": 0.0-1.0
-}}
-
-Focus on finding the most direct path to SAML/SSO configuration.
-"""
-
         try:
-            from konfig.services.llm_service import LLMService
-            llm_service = LLMService()
+            # Strategy 1: Try direct navigation to known Google SSO paths
+            known_google_sso_paths = [
+                "https://admin.google.com/ac/security/sso",
+                "https://admin.google.com/ac/security",
+                "https://admin.google.com/ac/apps/unified"
+            ]
             
-            response = await llm_service.generate_response(
-                prompt=analysis_prompt,
-                max_tokens=1000,
-                temperature=0.1
-            )
+            current_url = await self.web_interactor.get_current_url()
+            self.logger.info(f"Current URL: {current_url}")
             
-            analysis = json.loads(response.strip())
+            # Strategy 2: Scan current page for navigation elements
+            page_scan_result = await self._scan_page_for_navigation()
             
-            if analysis.get("sso_found") and analysis.get("sso_url"):
-                self.logger.info(f"Found SSO settings page: {analysis['sso_url']}")
-                return analysis["sso_url"]
+            if page_scan_result.get("security_found"):
+                # Click on Security section
+                security_clicked = await self._smart_click_by_text("Security")
+                if security_clicked:
+                    await self.web_interactor._page.wait_for_timeout(2000)  # Wait for navigation
+                    
+                    # Look for SSO options in Security section
+                    sso_result = await self._scan_page_for_sso_options()
+                    if sso_result.get("sso_found"):
+                        await self._smart_click_by_text(sso_result["sso_text"])
+                        await self.web_interactor._page.wait_for_timeout(2000)
+                        return await self.web_interactor.get_current_url()
             
-            elif analysis.get("navigation_needed") and analysis.get("actions_required"):
-                # Perform navigation actions
-                for action in analysis["actions_required"]:
-                    if action["action"] == "click":
-                        success = await self._smart_click(action["selector"])
-                        if success:
-                            # Check if we're now on the SSO page
-                            new_url = await self.web_interactor.get_current_url()
-                            if "sso" in new_url.lower() or "saml" in new_url.lower():
-                                return new_url
+            # Strategy 3: Try direct path navigation if page scanning failed
+            for path in known_google_sso_paths:
+                try:
+                    self.logger.info(f"Trying direct navigation to: {path}")
+                    result = await self.web_interactor.navigate(path)
+                    if result.get("success"):
+                        await self.web_interactor._page.wait_for_timeout(3000)
+                        
+                        # Check if we reached a valid page
+                        final_url = await self.web_interactor.get_current_url()
+                        page_title = await self.web_interactor.get_page_title()
+                        
+                        if "sso" in final_url.lower() or "sso" in page_title.lower():
+                            self.logger.info(f"Successfully navigated to SSO page: {final_url}")
+                            return final_url
+                        
+                except Exception as e:
+                    self.logger.warning(f"Failed to navigate to {path}: {e}")
+                    continue
             
+            self.logger.warning("Could not find SSO settings page using any strategy")
             return None
             
         except Exception as e:
@@ -238,7 +223,10 @@ Be precise with selectors - use ID, name, or unique attributes when possible.
                 temperature=0.1
             )
             
-            config = json.loads(response.strip())
+            # Use robust JSON extraction
+            from konfig.services.intelligent_planner import IntelligentPlanner
+            planner = IntelligentPlanner()
+            config = planner._extract_json_from_response(response)
             
             # Execute the configuration actions
             configured_fields = []
@@ -332,6 +320,100 @@ Be precise with selectors - use ID, name, or unique attributes when possible.
         except Exception:
             return False
     
+    async def _smart_click_by_text(self, text: str) -> bool:
+        """Click element containing specific text using robust search."""
+        try:
+            # Strategy 1: Use Playwright's text search
+            try:
+                await self.web_interactor._page.click(f"text={text}", timeout=5000)
+                return True
+            except Exception:
+                pass
+            
+            # Strategy 2: Use XPath to find text
+            try:
+                xpath = f"//*[contains(text(), '{text}')]"
+                await self.web_interactor._page.click(f"xpath={xpath}", timeout=5000)
+                return True
+            except Exception:
+                pass
+            
+            # Strategy 3: Search in various clickable elements
+            clickable_selectors = [
+                f"button:has-text('{text}')",
+                f"a:has-text('{text}')",
+                f"div[role='button']:has-text('{text}')",
+                f"span:has-text('{text}')",
+                f"li:has-text('{text}')"
+            ]
+            
+            for selector in clickable_selectors:
+                try:
+                    await self.web_interactor._page.click(selector, timeout=2000)
+                    return True
+                except Exception:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Failed to click element with text '{text}': {e}")
+            return False
+    
+    async def _scan_page_for_navigation(self) -> Dict[str, Any]:
+        """Scan current page for navigation elements."""
+        try:
+            # Get page content and look for navigation elements
+            dom_content = await self.web_interactor.get_current_dom(simplify=True)
+            
+            # Look for common navigation keywords
+            navigation_keywords = ["Security", "Apps", "Authentication", "Directory", "Admin"]
+            found_navigation = {}
+            
+            for keyword in navigation_keywords:
+                # Check if keyword exists in page content
+                if keyword.lower() in dom_content.lower():
+                    found_navigation[keyword.lower() + "_found"] = True
+                    self.logger.info(f"Found '{keyword}' in page navigation")
+                else:
+                    found_navigation[keyword.lower() + "_found"] = False
+            
+            return found_navigation
+            
+        except Exception as e:
+            self.logger.error(f"Failed to scan page for navigation: {e}")
+            return {}
+    
+    async def _scan_page_for_sso_options(self) -> Dict[str, Any]:
+        """Scan current page for SSO-related options."""
+        try:
+            # Look for SSO-related text on the page
+            sso_keywords = [
+                "Single sign-on",
+                "SSO",
+                "SAML",
+                "Set up SSO",
+                "Third party SSO",
+                "Identity provider",
+                "Configure SSO"
+            ]
+            
+            dom_content = await self.web_interactor.get_current_dom(simplify=True)
+            
+            for keyword in sso_keywords:
+                if keyword.lower() in dom_content.lower():
+                    self.logger.info(f"Found SSO keyword: {keyword}")
+                    return {
+                        "sso_found": True,
+                        "sso_text": keyword
+                    }
+            
+            return {"sso_found": False}
+            
+        except Exception as e:
+            self.logger.error(f"Failed to scan page for SSO options: {e}")
+            return {"sso_found": False}
+    
     async def _test_sso_configuration(self, vendor_name: str) -> Dict[str, Any]:
         """Test the SSO configuration if possible."""
         
@@ -367,7 +449,10 @@ Respond with JSON:
                 temperature=0.1
             )
             
-            test_info = json.loads(response.strip())
+            # Use robust JSON extraction
+            from konfig.services.intelligent_planner import IntelligentPlanner
+            planner = IntelligentPlanner()
+            test_info = planner._extract_json_from_response(response)
             
             # If test button available, click it
             if test_info.get("test_available") and test_info.get("test_button_selector"):
@@ -376,7 +461,7 @@ Respond with JSON:
                 
                 if test_success:
                     # Wait a moment for results
-                    await self.web_interactor.page.wait_for_timeout(3000)
+                    await self.web_interactor._page.wait_for_timeout(3000)
                     
                     # Check for test results
                     updated_content = await self.web_interactor.get_current_dom(simplify=True)
