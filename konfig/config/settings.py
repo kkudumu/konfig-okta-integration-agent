@@ -171,7 +171,7 @@ class BrowserSettings(BaseSettings):
     """Browser automation configuration settings."""
     
     headless: bool = Field(default=True, env="BROWSER_HEADLESS")
-    timeout_ms: int = Field(default=30000, env="BROWSER_TIMEOUT_MS")
+    timeout_ms: int = Field(default=10000, env="BROWSER_TIMEOUT_MS")
     viewport_width: int = Field(default=1920, env="BROWSER_VIEWPORT_WIDTH")
     viewport_height: int = Field(default=1080, env="BROWSER_VIEWPORT_HEIGHT")
     user_agent: str = Field(

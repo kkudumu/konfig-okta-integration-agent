@@ -61,6 +61,7 @@ def integrate(
     app_name: Optional[str] = typer.Option(None, help="Custom application name"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Simulate the integration without making changes"),
     headless: bool = typer.Option(False, "--headless", help="Run browser in headless mode (invisible)"),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Automatically approve all integration steps without user review"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
 ) -> None:
     """
@@ -95,7 +96,7 @@ def integrate(
         console.print("👀 [cyan]Browser will open in visible mode - you can watch the agent work![/cyan]")
     
     try:
-        job_id = asyncio.run(_start_integration(url, okta_domain, app_name, dry_run, headless, verbose))
+        job_id = asyncio.run(_start_integration(url, okta_domain, app_name, dry_run, headless, verbose, auto_approve))
         
         console.print(f"✅ Integration job completed with ID: [green]{job_id}[/green]")
         console.print(f"💡 Use 'konfig jobs show --job-id {job_id}' to view details")
@@ -380,7 +381,7 @@ def health() -> None:
 
 
 # Implementation functions
-async def _start_integration(url: str, okta_domain: str, app_name: Optional[str], dry_run: bool, headless: bool, verbose: bool) -> str:
+async def _start_integration(url: str, okta_domain: str, app_name: Optional[str], dry_run: bool, headless: bool, verbose: bool, auto_approve: bool) -> str:
     """Start a new integration job."""
     # Temporarily override browser headless setting for this integration
     settings = get_settings()
@@ -404,7 +405,8 @@ async def _start_integration(url: str, okta_domain: str, app_name: Optional[str]
                     documentation_url=url,
                     okta_domain=okta_domain,
                     app_name=app_name,
-                    dry_run=dry_run
+                    dry_run=dry_run,
+                    auto_approve=auto_approve
                 )
                 
                 if result["success"]:
@@ -425,9 +427,20 @@ async def _start_integration(url: str, okta_domain: str, app_name: Optional[str]
                     ))
                     
                     return result["job_id"]
+                elif result.get("status") == "cancelled":
+                    progress.update(task, description="⚠️  Integration cancelled")
+                    console.print(Panel.fit(
+                        f"⚠️  Integration Cancelled\n\n"
+                        f"🆔 Job ID: {result['job_id']}\n"
+                        f"📝 Message: {result.get('message', 'Cancelled by user')}\n"
+                        f"⏱️  Duration: {result.get('duration_seconds', 0):.2f}s",
+                        title="Integration Cancelled",
+                        border_style="yellow"
+                    ))
+                    raise typer.Exit(0)  # Exit cleanly, not an error
                 else:
                     progress.update(task, description="❌ Integration failed!")
-                    console.print(f"❌ [red]Integration failed: {result.get('error', 'Unknown error')}[/red]")
+                    console.print(f"❌ [red]Integration failed: {result.get('error', result.get('message', 'Unknown error'))}[/red]")
                     raise typer.Exit(1)
                     
             except Exception as e:

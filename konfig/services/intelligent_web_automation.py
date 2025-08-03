@@ -261,7 +261,19 @@ Analyze the page and respond with JSON:
     "confidence": 0.0-1.0
 }}
 
-Be precise with selectors - use ID, name, label text, or unique attributes when possible.
+CRITICAL: Be precise with selectors. NEVER use generic selectors like "input", "button", "div".
+
+GOOD selectors:
+- input[name="entity_id"]
+- button[type="submit"]
+- #save-button
+- input[placeholder="Sign-in page URL"]
+- button:has-text("SAVE")
+
+BAD selectors (will timeout):
+- input (too generic, matches many elements)
+- button (too generic)
+- div (too generic)
 """
 
         try:

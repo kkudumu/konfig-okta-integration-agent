@@ -68,7 +68,8 @@ class MVPOrchestrator(LoggingMixin):
         okta_domain: str,
         app_name: Optional[str] = None,
         vendor_hint: Optional[str] = None,
-        dry_run: bool = False
+        dry_run: bool = False,
+        auto_approve: bool = False
     ) -> Dict[str, Any]:
         """
         Execute SSO integration using hard-coded plans.
@@ -144,8 +145,35 @@ class MVPOrchestrator(LoggingMixin):
                     plan=plan,
                     okta_domain=okta_domain,
                     app_name=app_name or vendor_info.get("vendor_name", "Unknown App"),
-                    dry_run=dry_run
+                    dry_run=dry_run,
+                    auto_approve=auto_approve
                 )
+            
+            # Check if the execution was cancelled
+            if execution_result.get("status") == "cancelled":
+                # Update job status as cancelled
+                await self.memory_module.update_job_status(job_id, "cancelled")
+                
+                # Calculate duration
+                duration = (datetime.now() - start_time).total_seconds()
+                
+                # Record cancellation metrics
+                job_completed(str(job_id), False, duration, vendor_hint or "unknown")
+                
+                result = {
+                    "success": False,
+                    "job_id": str(job_id),
+                    "vendor": vendor_info.get("vendor_name"),
+                    "plan_used": plan["name"],
+                    "duration_seconds": duration,
+                    "status": "cancelled",
+                    "message": execution_result.get("message", "Integration cancelled by user"),
+                    "steps_completed": 0,
+                    "dry_run": dry_run
+                }
+                
+                self.logger.info("Integration cancelled by user", **result)
+                return result
             
             # Update job status
             await self.memory_module.update_job_status(job_id, "completed_success")
@@ -328,11 +356,56 @@ class MVPOrchestrator(LoggingMixin):
         plan: Dict[str, Any],
         okta_domain: str,
         app_name: str,
-        dry_run: bool = False
+        dry_run: bool = False,
+        auto_approve: bool = False
     ) -> Dict[str, Any]:
-        """Execute the integration plan."""
+        """Execute the integration plan with user approval."""
         
-        steps = plan["plan"]
+        # Step 1: Handle plan approval (skip if auto_approve is True)
+        if auto_approve:
+            self.logger.info("Auto-approve enabled, skipping user approval")
+            steps = plan["plan"]
+        else:
+            from konfig.services.plan_approval import PlanApprovalService
+            
+            approval_service = PlanApprovalService()
+            
+            integration_context = {
+                "vendor_name": plan.get("metadata", {}).get("vendor_name", "Unknown Vendor"),
+                "okta_domain": okta_domain,
+                "app_name": app_name,
+                "dry_run": dry_run,
+                "job_id": str(job_id)
+            }
+            
+            # Request user approval
+            approved_steps, user_approved = await approval_service.request_plan_approval(
+                raw_plan=plan["plan"],
+                integration_context=integration_context
+            )
+            
+            if not user_approved:
+                self.logger.info("Integration cancelled by user")
+                return {
+                    "status": "cancelled",
+                    "message": "Integration cancelled by user",
+                    "executed_steps": 0,
+                    "total_steps": len(plan["plan"])
+                }
+            
+            # Display execution summary
+            approval_service.display_execution_summary(approved_steps)
+            
+            # Convert approved steps back to dict format for execution
+            steps = [
+                {
+                    "name": step.name,
+                    "tool": step.tool,
+                    "action": step.action,
+                    "params": step.params
+                }
+                for step in approved_steps
+            ]
         completed_steps = 0
         okta_app_id = None
         

@@ -251,11 +251,13 @@ Generate steps that cover:
 4. Configuring SAML settings in vendor system
 5. Testing the SSO connection
 
-IMPORTANT: For WebInteractor steps that need selectors:
+CRITICAL SELECTOR RULES:
+- NEVER use generic selectors: "input", "button", "div", "span" (will timeout!)
+- ALWAYS be specific: 'input[name="entity_id"]', 'button[type="submit"]', '#save-button'
 - Use VALID CSS selectors like 'button[aria-label="Set up SSO"]' or '#sso-setup-button'
 - NEVER use ':contains()' pseudo-class - it's not valid CSS!
 - For text-based clicking, use the "text_content" parameter instead of selectors with :contains()
-- Use proper CSS selectors: 'button', 'a', 'input[type="submit"]', '.class-name', '#id-name'
+- Use attributes: input[placeholder="URL"], button[aria-label="Save"]
 - Provide meaningful parameter values, never use null or empty strings
 - For click actions targeting text, use "text_content" parameter with the text to find
 
