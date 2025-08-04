@@ -397,16 +397,27 @@ async def _start_integration(url: str, okta_domain: str, app_name: Optional[str]
             console=console,
         ) as progress:
             
-            task = progress.add_task("Starting integration...", total=None)
+            task = progress.add_task("Initializing integration...", total=None)
             
             try:
+                # Create progress callback
+                def update_progress(step_info):
+                    step_name = step_info.get("name", "Unknown step")
+                    step_action = step_info.get("action", "")
+                    if step_action:
+                        description = f"Step: {step_name} - {step_action}"
+                    else:
+                        description = f"Step: {step_name}"
+                    progress.update(task, description=description)
+                
                 # Start the integration
                 result = await orchestrator.integrate_application(
                     documentation_url=url,
                     okta_domain=okta_domain,
                     app_name=app_name,
                     dry_run=dry_run,
-                    auto_approve=auto_approve
+                    auto_approve=auto_approve,
+                    progress_callback=update_progress
                 )
                 
                 if result["success"]:

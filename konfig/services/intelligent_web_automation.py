@@ -71,11 +71,22 @@ class IntelligentWebAutomation(LoggingMixin):
             # Step 1: Navigate to admin console
             await self.web_interactor.navigate(admin_url)
             
-            # Step 1.5: Handle authentication if needed (Google Workspace)
-            if "google.com" in admin_url.lower() and vendor_name.lower() == "google workspace":
-                from konfig.services.google_auth_service import GoogleAuthService
-                auth_service = GoogleAuthService()
-                auth_result = await auth_service.authenticate_to_admin_console(self.web_interactor, admin_url)
+            # Step 1.5: Handle authentication if needed (Any vendor)
+            from konfig.services.vendor_auth_service import VendorAuthService
+            auth_service = VendorAuthService()
+            
+            # Check if we need to authenticate (look for login indicators in URL or page)
+            current_url = await self.web_interactor.get_current_url()
+            login_indicators = ['login', 'signin', 'sign-in', 'auth', 'authenticate']
+            needs_auth = any(indicator in current_url.lower() for indicator in login_indicators)
+            
+            if needs_auth:
+                self.logger.info(f"Authentication required for {vendor_name}")
+                auth_result = await auth_service.authenticate_to_vendor_console(
+                    self.web_interactor, 
+                    admin_url, 
+                    vendor_name
+                )
                 
                 if not auth_result["success"]:
                     return {
@@ -83,7 +94,9 @@ class IntelligentWebAutomation(LoggingMixin):
                         "message": f"Authentication failed: {auth_result['message']}"
                     }
                 
-                self.logger.info("Successfully authenticated to Google Admin Console")
+                self.logger.info(f"Successfully authenticated to {vendor_name}")
+            else:
+                self.logger.info(f"No authentication required for {vendor_name} - already logged in or different flow")
             
             # Step 2: Analyze page and find SSO/SAML settings
             sso_page_url = await self._find_sso_settings_page(vendor_name)

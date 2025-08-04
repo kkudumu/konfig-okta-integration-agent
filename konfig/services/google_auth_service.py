@@ -47,9 +47,9 @@ class GoogleAuthService(LoggingMixin):
             if "accounts.google.com" in current_url:
                 self.logger.info("Detected Google sign-in page, attempting authentication")
                 
-                # Get credentials from settings
-                username = self.settings.google.admin_username
-                password = self.settings.google.admin_password
+                # Get credentials from settings (prefer vendor settings, fallback to google settings)
+                username = self.settings.vendor.username or self.settings.google.admin_username
+                password = self.settings.vendor.password or self.settings.google.admin_password
                 
                 if not username or not password:
                     self.logger.warning("Google admin credentials not configured")

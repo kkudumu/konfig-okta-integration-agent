@@ -97,8 +97,22 @@ class LLMSettings(BaseSettings):
         extra = "ignore"
 
 
+class VendorSettings(BaseSettings):
+    """Generic vendor configuration settings for identity providers (Google, Microsoft, etc.)."""
+    
+    username: Optional[str] = Field(default=None, env="VENDOR_USERNAME")
+    password: Optional[str] = Field(default=None, env="VENDOR_PASSWORD")
+    domain: Optional[str] = Field(default=None, env="VENDOR_DOMAIN")
+    
+    class Config:
+        env_prefix = "VENDOR_"
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+
 class GoogleSettings(BaseSettings):
-    """Google Workspace admin configuration settings."""
+    """Google Workspace admin configuration settings (deprecated - use VendorSettings instead)."""
     
     admin_username: Optional[str] = Field(default=None, env="GOOGLE_ADMIN_USERNAME")
     admin_password: Optional[str] = Field(default=None, env="GOOGLE_ADMIN_PASSWORD")
@@ -259,7 +273,8 @@ class Settings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     okta: OktaSettings = OktaSettings()
     llm: LLMSettings = LLMSettings()
-    google: GoogleSettings = GoogleSettings()
+    vendor: VendorSettings = VendorSettings()  # Generic vendor settings
+    google: GoogleSettings = GoogleSettings()  # Deprecated - kept for backward compatibility
     security: SecuritySettings = SecuritySettings()
     vault: VaultSettings = VaultSettings()
     web: WebSettings = WebSettings()
